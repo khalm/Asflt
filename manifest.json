@@ -1,0 +1,18 @@
+{
+  "name": "Asflt",
+  "short_name": "Asflt",
+  "description": "Utforsk verden og fjern tåken steg for steg.",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#111111",
+  "theme_color": "#121216",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/854/854878.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
