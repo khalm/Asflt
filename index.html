@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Asflt</title>
+  
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#121216">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Asflt">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #map { height: 100%; width: 100vw; background: #111; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    
+    #fog-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 400;
+      pointer-events: none;
+    }
+
+    .hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 500;
+      background: rgba(18, 18, 22, 0.88);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 14px;
+      padding: 12px 16px;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .app-title {
+      font-size: 16px;
+      font-weight: 800;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #f3f4f6;
+    }
+
+    .stats-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .stat-card {
+      background: rgba(255, 255, 255, 0.05);
+      padding: 8px 10px;
+      border-radius: 8px;
+    }
+
+    .stat-card h4 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #9ca3af;
+      margin-bottom: 4px;
+    }
+
+    .stat-val {
+      font-size: 14px;
+      font-weight: 600;
+      color: #f3f4f6;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    button {
+      flex: 1;
+      padding: 8px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 12px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-secondary { background: rgba(255, 255, 255, 0.15); color: #fff; }
+    button:active { opacity: 0.7; }
+  </style>
+</head>
+<body>
+
+  <div id="map"></div>
+  <canvas id="fog-canvas"></canvas>
+
+  <div class="hud">
+    <div class="header-row">
+      <div class="app-title">Asflt</div>
+    </div>
+    <div class="stats-row">
+      <div class="stat-card">
+        <h4>I dag</h4>
+        <div class="stat-val" id="day-dist">0 m</div>
+        <div class="stat-val" id="day-steps" style="font-size: 12px; color: #9ca3af;">0 skritt</div>
+      </div>
+      <div class="stat-card">
+        <h4>Aktiv tur</h4>
+        <div class="stat-val" id="trip-dist">0 m</div>
+        <div class="stat-val" id="trip-steps" style="font-size: 12px; color: #9ca3af;">0 skritt</div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary" id="btn-recenter">Sentrer meg</button>
+      <button class="btn-secondary" id="btn-reset-trip">Ny tur</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const todayStr = new Date().toISOString().slice(0, 10);
+    let state = {
+      reveals: JSON.parse(localStorage.getItem('asflt_reveals') || '[]'),
+      dayDate: localStorage.getItem('asflt_day_date') || todayStr,
+      dayDist: parseFloat(localStorage.getItem('asflt_day_dist') || '0'),
+      daySteps: parseInt(localStorage.getItem('asflt_day_steps') || '0', 10),
+      tripDist: 0,
+      tripSteps: 0,
+      lastCoord: null
+    };
+
+    if (state.dayDate !== todayStr) {
+      state.dayDate = todayStr;
+      state.dayDist = 0;
+      state.daySteps = 0;
+      localStorage.setItem('asflt_day_date', todayStr);
+      localStorage.setItem('asflt_day_dist', '0');
+      localStorage.setItem('asflt_day_steps', '0');
+    }
+
+    const map = L.map('map', { zoomControl: false }).setView([62.37, 6.03], 15);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    const userMarker = L.circleMarker([0, 0], {
+      radius: 6,
+      color: '#fff',
+      fillColor: '#3b82f6',
+      fillOpacity: 1,
+      weight: 2
+    }).addTo(map);
+
+    const canvas = document.getElementById('fog-canvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      redrawFog();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    const REVEAL_RADIUS_METERS = 35;
+
+    function redrawFog() {
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = 'rgba(10, 12, 18, 0.96)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.globalCompositeOperation = 'destination-out';
+      state.reveals.forEach(pt => drawRevealCircle(pt.lat, pt.lng));
+    }
+
+    function drawRevealCircle(lat, lng) {
+      const containerPoint = map.latLngToContainerPoint([lat, lng]);
+      const edgeLatLng = [lat + (REVEAL_RADIUS_METERS / 111320), lng];
+      const edgePoint = map.latLngToContainerPoint(edgeLatLng);
+      const pixelRadius = Math.max(18, Math.abs(edgePoint.y - containerPoint.y));
+
+      const grad = ctx.createRadialGradient(
+        containerPoint.x, containerPoint.y, pixelRadius * 0.4,
+        containerPoint.x, containerPoint.y, pixelRadius
+      );
+      grad.addColorStop(0, 'rgba(0, 0, 0, 1)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(containerPoint.x, containerPoint.y, pixelRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    map.on('move', redrawFog);
+    map.on('zoom', redrawFog);
+
+    function calcDistance(lat1, lon1, lat2, lon2) {
+      const R = 6371e3;
+      const phi1 = (lat1 * Math.PI) / 180;
+      const phi2 = (lat2 * Math.PI) / 180;
+      const dPhi = ((lat2 - lat1) * Math.PI) / 180;
+      const dLambda = ((lon2 - lon1) * Math.PI) / 180;
+      const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    function formatDist(meters) {
+      return meters >= 1000 ? `${(meters / 1000).toFixed(2)} km` : `${Math.round(meters)} m`;
+    }
+
+    function updateUI() {
+      document.getElementById('day-dist').innerText = formatDist(state.dayDist);
+      document.getElementById('day-steps').innerText = `${state.daySteps} skritt`;
+      document.getElementById('trip-dist').innerText = formatDist(state.tripDist);
+      document.getElementById('trip-steps').innerText = `${state.tripSteps} skritt`;
+    }
+
+    let firstFix = true;
+    navigator.geolocation.watchPosition(
+      pos => {
+        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+        if (accuracy > 40) return;
+
+        userMarker.setLatLng([lat, lng]);
+        if (firstFix) {
+          map.setView([lat, lng], 16);
+          firstFix = false;
+        }
+
+        if (state.lastCoord) {
+          const delta = calcDistance(state.lastCoord.lat, state.lastCoord.lng, lat, lng);
+          if (delta >= 3 && delta < 150) {
+            state.dayDist += delta;
+            state.tripDist += delta;
+            localStorage.setItem('asflt_day_dist', state.dayDist);
+            
+            state.reveals.push({ lat, lng });
+            localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
+            drawRevealCircle(lat, lng);
+            state.lastCoord = { lat, lng };
+          }
+        } else {
+          state.reveals.push({ lat, lng });
+          localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
+          drawRevealCircle(lat, lng);
+          state.lastCoord = { lat, lng };
+        }
+        updateUI();
+      },
+      err => console.warn(err),
+      { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+    );
+
+    let lastAccel = 0;
+    let stepCooldown = false;
+    const STEP_THRESHOLD = 11.5;
+
+    function handleMotion(event) {
+      const acc = event.accelerationIncludingGravity;
+      if (!acc) return;
+      const mag = Math.sqrt(acc.x ** 2 + acc.y ** 2 + acc.z ** 2);
+
+      if (mag > STEP_THRESHOLD && !stepCooldown && (mag - lastAccel) > 1.2) {
+        state.daySteps++;
+        state.tripSteps++;
+        localStorage.setItem('asflt_day_steps', state.daySteps);
+        updateUI();
+        stepCooldown = true;
+        setTimeout(() => { stepCooldown = false; }, 320);
+      }
+      lastAccel = mag;
+    }
+
+    async function initSensors() {
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+        try {
+          const res = await DeviceMotionEvent.requestPermission();
+          if (res === 'granted') {
+            window.addEventListener('devicemotion', handleMotion);
+          }
+        } catch (e) { console.error(e); }
+      } else {
+        window.addEventListener('devicemotion', handleMotion);
+      }
+    }
+
+    document.getElementById('btn-recenter').addEventListener('click', () => {
+      initSensors();
+      if (state.lastCoord) map.panTo([state.lastCoord.lat, state.lastCoord.lng]);
+    });
+
+    document.getElementById('btn-reset-trip').addEventListener('click', () => {
+      state.tripDist = 0;
+      state.tripSteps = 0;
+      updateUI();
+    });
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW feil:', err));
+    }
+
+    resizeCanvas();
+    updateUI();
+  </script>
+</body>
+</html>
