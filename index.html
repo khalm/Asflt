@@ -51,12 +51,35 @@
       align-items: center;
     }
 
+    .app-title-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     .app-title {
       font-size: 16px;
       font-weight: 800;
       letter-spacing: 1px;
       text-transform: uppercase;
       color: #f3f4f6;
+    }
+
+    .trip-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      background: rgba(255, 255, 255, 0.1);
+      color: #9ca3af;
+    }
+
+    .trip-badge.active {
+      background: rgba(34, 197, 94, 0.2);
+      color: #4ade80;
+      border: 1px solid rgba(74, 222, 128, 0.3);
     }
 
     .stats-row {
@@ -103,7 +126,81 @@
 
     .btn-primary { background: #3b82f6; color: #fff; }
     .btn-secondary { background: rgba(255, 255, 255, 0.15); color: #fff; }
+    .btn-badge { padding: 4px 10px; font-size: 11px; border-radius: 6px; flex: initial; }
     button:active { opacity: 0.7; }
+
+    /* Historikk Modal */
+    #trip-modal {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100%;
+      background: rgba(10, 10, 14, 0.95);
+      z-index: 1000;
+      display: none;
+      flex-direction: column;
+      padding: 20px 16px;
+      color: #fff;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .modal-header h2 { font-size: 18px; font-weight: 700; }
+    .close-btn { background: transparent; color: #9ca3af; font-size: 18px; border: none; padding: 4px 8px; cursor: pointer; }
+
+    .trip-list {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .trip-item {
+      background: rgba(255, 255, 255, 0.06);
+      padding: 12px 14px;
+      border-radius: 10px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .trip-info h5 { font-size: 13px; font-weight: 600; color: #f3f4f6; margin-bottom: 3px; }
+    .trip-info p { font-size: 11px; color: #9ca3af; }
+
+    .trip-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .btn-view-trip { 
+      padding: 6px 12px; 
+      font-size: 11px; 
+      border-radius: 6px; 
+      background: #2563eb; 
+      color: #fff; 
+      flex: initial; 
+    }
+
+    .btn-delete-trip {
+      padding: 6px 10px;
+      font-size: 11px;
+      border-radius: 6px;
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      flex: initial;
+    }
+    .btn-delete-trip:active {
+      background: rgba(239, 68, 68, 0.35);
+    }
   </style>
 </head>
 <body>
@@ -113,7 +210,11 @@
 
   <div class="hud">
     <div class="header-row">
-      <div class="app-title">Asflt</div>
+      <div class="app-title-wrap">
+        <div class="app-title">Asflt</div>
+        <div class="trip-badge" id="trip-badge">I ro</div>
+      </div>
+      <button class="btn-secondary btn-badge" id="btn-open-trips">Historikk</button>
     </div>
     <div class="stats-row">
       <div class="stat-card">
@@ -122,27 +223,41 @@
         <div class="stat-val" id="day-steps" style="font-size: 12px; color: #9ca3af;">0 skritt</div>
       </div>
       <div class="stat-card">
-        <h4>Aktiv tur</h4>
+        <h4 id="trip-header-title">Aktiv tur</h4>
         <div class="stat-val" id="trip-dist">0 m</div>
         <div class="stat-val" id="trip-steps" style="font-size: 12px; color: #9ca3af;">0 skritt</div>
       </div>
     </div>
     <div class="btn-row">
       <button class="btn-primary" id="btn-recenter">Sentrer meg</button>
-      <button class="btn-secondary" id="btn-reset-trip">Ny tur</button>
+      <button class="btn-secondary" id="btn-manual-new-trip">Start ny tur</button>
     </div>
+  </div>
+
+  <div id="trip-modal">
+    <div class="modal-header">
+      <h2>Lagrede turer</h2>
+      <button class="close-btn" id="btn-close-trips">✕ Lukk</button>
+    </div>
+    <div class="trip-list" id="trip-list-container"></div>
   </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
     const todayStr = new Date().toISOString().slice(0, 10);
+    const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
+    const MIN_DISPLACEMENT_TO_TRIGGER_TRIP = 50; 
+    const MIN_DIST_TO_SAVE_TRIP = 150;           
+
+    let trips = JSON.parse(localStorage.getItem('asflt_trips') || '[]');
+    let currentTrip = JSON.parse(localStorage.getItem('asflt_current_trip') || 'null');
+    let lastMoveTimestamp = parseInt(localStorage.getItem('asflt_last_move_time') || '0', 10);
+
     let state = {
       reveals: JSON.parse(localStorage.getItem('asflt_reveals') || '[]'),
       dayDate: localStorage.getItem('asflt_day_date') || todayStr,
       dayDist: parseFloat(localStorage.getItem('asflt_day_dist') || '0'),
       daySteps: parseInt(localStorage.getItem('asflt_day_steps') || '0', 10),
-      tripDist: 0,
-      tripSteps: 0,
       lastCoord: null
     };
 
@@ -155,11 +270,46 @@
       localStorage.setItem('asflt_day_steps', '0');
     }
 
+    function createEmptyTrip(startCoord = null) {
+      return {
+        id: Date.now(),
+        startTime: new Date().toISOString(),
+        endTime: null,
+        originCoord: startCoord,
+        isConfirmed: false,
+        dist: 0,
+        steps: 0,
+        path: startCoord ? [startCoord] : []
+      };
+    }
+
+    function finalizeCurrentTrip() {
+      if (currentTrip && currentTrip.isConfirmed && currentTrip.dist >= MIN_DIST_TO_SAVE_TRIP && currentTrip.path.length > 2) {
+        currentTrip.endTime = new Date().toISOString();
+        trips.unshift(currentTrip);
+        localStorage.setItem('asflt_trips', JSON.stringify(trips));
+      }
+    }
+
+    function startNewTrip(startCoord = null) {
+      finalizeCurrentTrip();
+      currentTrip = createEmptyTrip(startCoord);
+      localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
+      updateUI();
+    }
+
+    if (!currentTrip) {
+      currentTrip = createEmptyTrip();
+    }
+
+    // --- Kart og Canvas ---
     const map = L.map('map', { zoomControl: false }).setView([62.37, 6.03], 15);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '© OpenStreetMap'
     }).addTo(map);
+
+    let inspectedTripLayer = null;
 
     const userMarker = L.circleMarker([0, 0], {
       radius: 6,
@@ -229,15 +379,27 @@
     function updateUI() {
       document.getElementById('day-dist').innerText = formatDist(state.dayDist);
       document.getElementById('day-steps').innerText = `${state.daySteps} skritt`;
-      document.getElementById('trip-dist').innerText = formatDist(state.tripDist);
-      document.getElementById('trip-steps').innerText = `${state.tripSteps} skritt`;
+
+      const badge = document.getElementById('trip-badge');
+      if (currentTrip && currentTrip.isConfirmed) {
+        badge.innerText = 'På tur';
+        badge.className = 'trip-badge active';
+        document.getElementById('trip-dist').innerText = formatDist(currentTrip.dist);
+        document.getElementById('trip-steps').innerText = `${currentTrip.steps} skritt`;
+      } else {
+        badge.innerText = 'I ro / Klar';
+        badge.className = 'trip-badge';
+        document.getElementById('trip-dist').innerText = '0 m';
+        document.getElementById('trip-steps').innerText = '0 skritt';
+      }
     }
 
+    // --- GPS med 50m / 150m filter ---
     let firstFix = true;
     navigator.geolocation.watchPosition(
       pos => {
         const { latitude: lat, longitude: lng, accuracy } = pos.coords;
-        if (accuracy > 40) return;
+        if (accuracy > 35) return;
 
         userMarker.setLatLng([lat, lng]);
         if (firstFix) {
@@ -245,30 +407,66 @@
           firstFix = false;
         }
 
+        const now = Date.now();
+        const currentCoord = { lat, lng };
+
+        if (!currentTrip.originCoord) {
+          currentTrip.originCoord = currentCoord;
+          currentTrip.path = [currentCoord];
+        }
+
         if (state.lastCoord) {
           const delta = calcDistance(state.lastCoord.lat, state.lastCoord.lng, lat, lng);
-          if (delta >= 3 && delta < 150) {
+
+          if (lastMoveTimestamp && (now - lastMoveTimestamp > INACTIVITY_TIMEOUT_MS) && delta > 40) {
+            startNewTrip(currentCoord);
+          }
+
+          const distFromOrigin = calcDistance(
+            currentTrip.originCoord.lat,
+            currentTrip.originCoord.lng,
+            lat,
+            lng
+          );
+
+          if (!currentTrip.isConfirmed && distFromOrigin >= MIN_DISPLACEMENT_TO_TRIGGER_TRIP) {
+            currentTrip.isConfirmed = true;
+            state.reveals.push(currentTrip.originCoord);
+            drawRevealCircle(currentTrip.originCoord.lat, currentTrip.originCoord.lng);
+          }
+
+          if (delta >= 4 && delta < 150) {
+            lastMoveTimestamp = now;
+            localStorage.setItem('asflt_last_move_time', now.toString());
+
             state.dayDist += delta;
-            state.tripDist += delta;
             localStorage.setItem('asflt_day_dist', state.dayDist);
-            
-            state.reveals.push({ lat, lng });
-            localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
-            drawRevealCircle(lat, lng);
-            state.lastCoord = { lat, lng };
+
+            if (currentTrip.isConfirmed) {
+              currentTrip.dist += delta;
+              currentTrip.path.push(currentCoord);
+              localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
+
+              state.reveals.push(currentCoord);
+              localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
+              drawRevealCircle(lat, lng);
+            }
+
+            state.lastCoord = currentCoord;
           }
         } else {
-          state.reveals.push({ lat, lng });
-          localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
-          drawRevealCircle(lat, lng);
-          state.lastCoord = { lat, lng };
+          lastMoveTimestamp = now;
+          localStorage.setItem('asflt_last_move_time', now.toString());
+          state.lastCoord = currentCoord;
         }
+
         updateUI();
       },
       err => console.warn(err),
       { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
     );
 
+    // --- Skritteller ---
     let lastAccel = 0;
     let stepCooldown = false;
     const STEP_THRESHOLD = 11.5;
@@ -280,7 +478,10 @@
 
       if (mag > STEP_THRESHOLD && !stepCooldown && (mag - lastAccel) > 1.2) {
         state.daySteps++;
-        state.tripSteps++;
+        if (currentTrip && currentTrip.isConfirmed) {
+          currentTrip.steps++;
+          localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
+        }
         localStorage.setItem('asflt_day_steps', state.daySteps);
         updateUI();
         stepCooldown = true;
@@ -302,15 +503,107 @@
       }
     }
 
-    document.getElementById('btn-recenter').addEventListener('click', () => {
-      initSensors();
-      if (state.lastCoord) map.panTo([state.lastCoord.lat, state.lastCoord.lng]);
+    // --- Historikk & Sletting ---
+    const modal = document.getElementById('trip-modal');
+    const tripListContainer = document.getElementById('trip-list-container');
+
+    document.getElementById('btn-open-trips').addEventListener('click', () => {
+      renderTripList();
+      modal.style.display = 'flex';
     });
 
-    document.getElementById('btn-reset-trip').addEventListener('click', () => {
-      state.tripDist = 0;
-      state.tripSteps = 0;
-      updateUI();
+    document.getElementById('btn-close-trips').addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+
+    function deleteTrip(idx) {
+      if (!confirm("Vil du slette denne turen fra listen? (Kartet forblir utforsket)")) return;
+
+      trips.splice(idx, 1);
+      localStorage.setItem('asflt_trips', JSON.stringify(trips));
+
+      if (inspectedTripLayer) {
+        map.removeLayer(inspectedTripLayer);
+        inspectedTripLayer = null;
+      }
+
+      renderTripList();
+    }
+
+    function renderTripList() {
+      tripListContainer.innerHTML = '';
+      if (trips.length === 0) {
+        tripListContainer.innerHTML = '<p style="color: #9ca3af; text-align: center; margin-top: 40px;">Ingen turer lagret enda.</p>';
+        return;
+      }
+
+      trips.forEach((t, idx) => {
+        const date = new Date(t.startTime).toLocaleDateString('no-NO', { 
+          day: '2-digit', 
+          month: 'short', 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        });
+        
+        const item = document.createElement('div');
+        item.className = 'trip-item';
+        item.innerHTML = `
+          <div class="trip-info">
+            <h5>Tur #${trips.length - idx} – ${date}</h5>
+            <p>${formatDist(t.dist)} • ${t.steps} skritt</p>
+          </div>
+          <div class="trip-actions">
+            <button class="btn-view-trip" data-idx="${idx}">Vis</button>
+            <button class="btn-delete-trip" data-del-idx="${idx}">Slett</button>
+          </div>
+        `;
+        tripListContainer.appendChild(item);
+      });
+
+      document.querySelectorAll('.btn-view-trip').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const idx = parseInt(e.target.getAttribute('data-idx'), 10);
+          showTripOnMap(trips[idx]);
+          modal.style.display = 'none';
+        });
+      });
+
+      document.querySelectorAll('.btn-delete-trip').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const idx = parseInt(e.target.getAttribute('data-del-idx'), 10);
+          deleteTrip(idx);
+        });
+      });
+    }
+
+    function showTripOnMap(trip) {
+      if (inspectedTripLayer) {
+        map.removeLayer(inspectedTripLayer);
+      }
+      if (!trip.path || trip.path.length < 2) return;
+
+      const latlngs = trip.path.map(p => [p.lat, p.lng]);
+      inspectedTripLayer = L.polyline(latlngs, {
+        color: '#60a5fa',
+        weight: 5,
+        opacity: 0.9,
+        dashArray: '8, 8'
+      }).addTo(map);
+
+      map.fitBounds(inspectedTripLayer.getBounds(), { padding: [60, 60] });
+    }
+
+    document.getElementById('btn-recenter').addEventListener('click', () => {
+      initSensors();
+      if (inspectedTripLayer) {
+        map.removeLayer(inspectedTripLayer);
+        inspectedTripLayer = null;
+      }
+      if (state.lastCoord) map.setView([state.lastCoord.lat, state.lastCoord.lng], 16);
+    });
+
+    document.getElementById('btn-manual-new-trip').addEventListener('click', () => {
+      startNewTrip(state.lastCoord);
     });
 
     if ('serviceWorker' in navigator) {
