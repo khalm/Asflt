@@ -33,29 +33,42 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Add Android platform and inject icons
+      - name: Add Android platform and configure icons & permissions
         run: |
           npx cap add android
-          
-          # Fjern anydpi-mappen som skaper Duplicate Resources-konflikt
-          rm -rf android/app/src/main/res/mipmap-anydpi-v26
 
-          # Finn bildefilen i roten
+          # Ikoner
           ICON_FILE=$(ls asflt_icon-512.png 2>/dev/null || ls asflt_icon*.png 2>/dev/null | head -n 1)
-
           if [ -n "$ICON_FILE" ]; then
-            echo "Injiserer ikon fra: $ICON_FILE"
             for dir in android/app/src/main/res/mipmap-*; do
-              if [ -d "$dir" ]; then
+              if [ -d "$dir" ] && [[ "$dir" != *"anydpi"* ]]; then
                 cp "$ICON_FILE" "$dir/ic_launcher.png"
                 cp "$ICON_FILE" "$dir/ic_launcher_round.png"
                 cp "$ICON_FILE" "$dir/ic_launcher_foreground.png"
               fi
             done
+
+            mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+            cat << 'EOF' > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background"/>
+    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+</adaptive-icon>
+EOF
+            cp android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml
+            
+            mkdir -p android/app/src/main/res/values
+            cat << 'EOF' > android/app/src/main/res/values/ic_launcher_background.xml
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#1a1a1e</color>
+</resources>
+EOF
           fi
 
-          # Legg til bakgrunns- og GPS-rettigheter
-          sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />' android/app/src/main/AndroidManifest.xml
+          # VIKTIG: Gi internett, posisjon og nettverkstilgang til appen
+          sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />' android/app/src/main/AndroidManifest.xml
 
       - name: Build Debug APK
         run: |
