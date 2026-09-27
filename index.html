@@ -16,6 +16,38 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body, #map { height: 100%; width: 100vw; background: #111; overflow: hidden; font-family: Roboto, -apple-system, sans-serif; }
     
+    /* 1200ms Splash Screen */
+    #splash-screen {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: #0d0d11;
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      transition: opacity 0.35s ease-out;
+    }
+
+    #splash-screen img {
+      width: 110px;
+      height: 110px;
+      border-radius: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+    }
+
+    #splash-screen h1 {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: 2px;
+      color: #f3f4f6;
+      text-transform: uppercase;
+    }
+
     #fog-canvas {
       position: absolute;
       top: 0;
@@ -204,6 +236,12 @@
 </head>
 <body>
 
+  <!-- Splash Screen -->
+  <div id="splash-screen">
+    <img src="asflt_icon-512.png" onerror="this.src='asflt_icon-192.png'" alt="Asflt">
+    <h1>Asflt</h1>
+  </div>
+
   <div id="map"></div>
   <canvas id="fog-canvas"></canvas>
 
@@ -243,6 +281,45 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
+    // --- 1. Kart og Canvas Setup ---
+    const initialLat = 62.37;
+    const initialLng = 6.03;
+
+    const map = L.map('map', { zoomControl: false }).setView([initialLat, initialLng], 16);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    const userMarker = L.circleMarker([initialLat, initialLng], {
+      radius: 6,
+      color: '#fff',
+      fillColor: '#3b82f6',
+      fillOpacity: 1,
+      weight: 2
+    }).addTo(map);
+
+    const canvas = document.getElementById('fog-canvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      map.invalidateSize();
+      redrawFog();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // --- 2. Splash Screen Timer (1200ms) ---
+    setTimeout(() => {
+      const splash = document.getElementById('splash-screen');
+      splash.style.opacity = '0';
+      setTimeout(() => {
+        splash.style.display = 'none';
+        resizeCanvas();
+      }, 350);
+    }, 1200);
+
     const todayStr = new Date().toISOString().slice(0, 10);
     const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
     const MIN_DISPLACEMENT_TO_TRIGGER_TRIP = 50; 
@@ -301,34 +378,8 @@
       currentTrip = createEmptyTrip();
     }
 
-    // --- Kart og Canvas ---
-    const map = L.map('map', { zoomControl: false }).setView([62.37, 6.03], 15);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© OpenStreetMap'
-    }).addTo(map);
-
     let inspectedTripLayer = null;
-
-    const userMarker = L.circleMarker([0, 0], {
-      radius: 6,
-      color: '#fff',
-      fillColor: '#3b82f6',
-      fillOpacity: 1,
-      weight: 2
-    }).addTo(map);
-
-    const canvas = document.getElementById('fog-canvas');
-    const ctx = canvas.getContext('2d');
-
-    function resizeCanvas() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      redrawFog();
-    }
-    window.addEventListener('resize', resizeCanvas);
-
-    const REVEAL_RADIUS_METERS = 35;
+    const REVEAL_RADIUS_METERS = 40;
 
     function redrawFog() {
       ctx.globalCompositeOperation = 'source-over';
@@ -336,6 +387,16 @@
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       ctx.globalCompositeOperation = 'destination-out';
+      
+      // Åpne alltid der brukeren befinner seg
+      if (state.lastCoord) {
+        drawRevealCircle(state.lastCoord.lat, state.lastCoord.lng);
+      } else {
+        // Fallback til midten av kartet så det aldri er 100% beksvart
+        const center = map.getCenter();
+        drawRevealCircle(center.lat, center.lng);
+      }
+
       state.reveals.forEach(pt => drawRevealCircle(pt.lat, pt.lng));
     }
 
@@ -343,10 +404,10 @@
       const containerPoint = map.latLngToContainerPoint([lat, lng]);
       const edgeLatLng = [lat + (REVEAL_RADIUS_METERS / 111320), lng];
       const edgePoint = map.latLngToContainerPoint(edgeLatLng);
-      const pixelRadius = Math.max(18, Math.abs(edgePoint.y - containerPoint.y));
+      const pixelRadius = Math.max(24, Math.abs(edgePoint.y - containerPoint.y));
 
       const grad = ctx.createRadialGradient(
-        containerPoint.x, containerPoint.y, pixelRadius * 0.4,
+        containerPoint.x, containerPoint.y, pixelRadius * 0.45,
         containerPoint.x, containerPoint.y, pixelRadius
       );
       grad.addColorStop(0, 'rgba(0, 0, 0, 1)');
@@ -393,77 +454,85 @@
       }
     }
 
-    // --- GPS med 50m / 150m filter ---
+    // --- GPS med forbedret nøyaktighet ---
     let firstFix = true;
-    navigator.geolocation.watchPosition(
-      pos => {
-        const { latitude: lat, longitude: lng, accuracy } = pos.coords;
-        if (accuracy > 35) return;
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(
+        pos => {
+          const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+          userMarker.setLatLng([lat, lng]);
+          const currentCoord = { lat, lng };
 
-        userMarker.setLatLng([lat, lng]);
-        if (firstFix) {
-          map.setView([lat, lng], 16);
-          firstFix = false;
-        }
-
-        const now = Date.now();
-        const currentCoord = { lat, lng };
-
-        if (!currentTrip.originCoord) {
-          currentTrip.originCoord = currentCoord;
-          currentTrip.path = [currentCoord];
-        }
-
-        if (state.lastCoord) {
-          const delta = calcDistance(state.lastCoord.lat, state.lastCoord.lng, lat, lng);
-
-          if (lastMoveTimestamp && (now - lastMoveTimestamp > INACTIVITY_TIMEOUT_MS) && delta > 40) {
-            startNewTrip(currentCoord);
+          if (firstFix) {
+            map.setView([lat, lng], 16);
+            firstFix = false;
+            state.lastCoord = currentCoord;
+            state.reveals.push(currentCoord);
+            localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
+            redrawFog();
           }
 
-          const distFromOrigin = calcDistance(
-            currentTrip.originCoord.lat,
-            currentTrip.originCoord.lng,
-            lat,
-            lng
-          );
+          const now = Date.now();
 
-          if (!currentTrip.isConfirmed && distFromOrigin >= MIN_DISPLACEMENT_TO_TRIGGER_TRIP) {
-            currentTrip.isConfirmed = true;
-            state.reveals.push(currentTrip.originCoord);
-            drawRevealCircle(currentTrip.originCoord.lat, currentTrip.originCoord.lng);
+          if (!currentTrip.originCoord) {
+            currentTrip.originCoord = currentCoord;
+            currentTrip.path = [currentCoord];
           }
 
-          if (delta >= 4 && delta < 150) {
-            lastMoveTimestamp = now;
-            localStorage.setItem('asflt_last_move_time', now.toString());
+          if (state.lastCoord) {
+            const delta = calcDistance(state.lastCoord.lat, state.lastCoord.lng, lat, lng);
 
-            state.dayDist += delta;
-            localStorage.setItem('asflt_day_dist', state.dayDist);
-
-            if (currentTrip.isConfirmed) {
-              currentTrip.dist += delta;
-              currentTrip.path.push(currentCoord);
-              localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
-
-              state.reveals.push(currentCoord);
-              localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
-              drawRevealCircle(lat, lng);
+            if (lastMoveTimestamp && (now - lastMoveTimestamp > INACTIVITY_TIMEOUT_MS) && delta > 40) {
+              startNewTrip(currentCoord);
             }
 
-            state.lastCoord = currentCoord;
-          }
-        } else {
-          lastMoveTimestamp = now;
-          localStorage.setItem('asflt_last_move_time', now.toString());
-          state.lastCoord = currentCoord;
-        }
+            const distFromOrigin = calcDistance(
+              currentTrip.originCoord.lat,
+              currentTrip.originCoord.lng,
+              lat,
+              lng
+            );
 
-        updateUI();
-      },
-      err => console.warn(err),
-      { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
-    );
+            if (!currentTrip.isConfirmed && distFromOrigin >= MIN_DISPLACEMENT_TO_TRIGGER_TRIP) {
+              currentTrip.isConfirmed = true;
+            }
+
+            if (delta >= 4 && delta < 150) {
+              lastMoveTimestamp = now;
+              localStorage.setItem('asflt_last_move_time', now.toString());
+
+              state.dayDist += delta;
+              localStorage.setItem('asflt_day_dist', state.dayDist);
+
+              if (currentTrip.isConfirmed) {
+                currentTrip.dist += delta;
+                currentTrip.path.push(currentCoord);
+                localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
+
+                state.reveals.push(currentCoord);
+                localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
+                drawRevealCircle(lat, lng);
+              }
+
+              state.lastCoord = currentCoord;
+            }
+          } else {
+            lastMoveTimestamp = now;
+            localStorage.setItem('asflt_last_move_time', now.toString());
+            state.lastCoord = currentCoord;
+            redrawFog();
+          }
+
+          updateUI();
+        },
+        err => {
+          console.warn('Geolocation feil:', err);
+          // Hvis posisjon feiler, åpne likevel tåken der kartet står
+          redrawFog();
+        },
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
+      );
+    }
 
     // --- Skritteller ---
     let lastAccel = 0;
@@ -584,17 +653,20 @@
         map.removeLayer(inspectedTripLayer);
         inspectedTripLayer = null;
       }
-      if (state.lastCoord) map.setView([state.lastCoord.lat, state.lastCoord.lng], 16);
+      if (state.lastCoord) {
+        map.setView([state.lastCoord.lat, state.lastCoord.lng], 16);
+      } else {
+        const center = map.getCenter();
+        map.setView(center, 16);
+      }
+      redrawFog();
     });
 
     document.getElementById('btn-manual-new-trip').addEventListener('click', () => {
       startNewTrip(state.lastCoord);
     });
 
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW feil:', err));
-    }
-
+    // Initial tegningskjøring
     resizeCanvas();
     updateUI();
   </script>
