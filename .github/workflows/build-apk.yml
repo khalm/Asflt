@@ -28,15 +28,32 @@ jobs:
       - name: Prepare web assets
         run: |
           mkdir -p www
-          cp index.html manifest.json sw.js asflt_icon*.png www/ 2>/dev/null || cp index.html manifest.json sw.js www/
+          cp -r index.html manifest.json sw.js asflt_icon*.png www/ 2>/dev/null || cp index.html www/
 
       - name: Install dependencies
         run: npm install
 
-      - name: Add Android platform
+      - name: Add Android platform and inject icons
         run: |
           npx cap add android
-          # Legg til tillatelser for bakgrunns-GPS i AndroidManifest
+          
+          # Finn bildefilen uavhengig av om den heter 512 eller 192
+          ICON_FILE=$(ls asflt_icon-512.png 2>/dev/null || ls asflt_icon*.png | head -n 1)
+
+          if [ -n "$ICON_FILE" ]; then
+            echo "Injiserer ikon fra: $ICON_FILE"
+            for dir in android/app/src/main/res/mipmap-*; do
+              if [ -d "$dir" ]; then
+                cp "$ICON_FILE" "$dir/ic_launcher.png"
+                cp "$ICON_FILE" "$dir/ic_launcher_round.png"
+                cp "$ICON_FILE" "$dir/ic_launcher_foreground.png"
+              fi
+            done
+          else
+            echo "Advarsel: Fant ingen asflt_icon-fil i repoet!"
+          fi
+
+          # Legg til tillatelser for bakgrunns-GPS
           sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />' android/app/src/main/AndroidManifest.xml
 
       - name: Build Debug APK
