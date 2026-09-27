@@ -1,0 +1,8 @@
+{
+  "appId": "com.asflt.app",
+  "appName": "Asflt",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  }
+}
