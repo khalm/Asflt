@@ -37,8 +37,11 @@ jobs:
         run: |
           npx cap add android
           
-          # Finn bildefilen uavhengig av om den heter 512 eller 192
-          ICON_FILE=$(ls asflt_icon-512.png 2>/dev/null || ls asflt_icon*.png | head -n 1)
+          # Fjern anydpi-mappen som skaper Duplicate Resources-konflikt
+          rm -rf android/app/src/main/res/mipmap-anydpi-v26
+
+          # Finn bildefilen i roten
+          ICON_FILE=$(ls asflt_icon-512.png 2>/dev/null || ls asflt_icon*.png 2>/dev/null | head -n 1)
 
           if [ -n "$ICON_FILE" ]; then
             echo "Injiserer ikon fra: $ICON_FILE"
@@ -49,11 +52,9 @@ jobs:
                 cp "$ICON_FILE" "$dir/ic_launcher_foreground.png"
               fi
             done
-          else
-            echo "Advarsel: Fant ingen asflt_icon-fil i repoet!"
           fi
 
-          # Legg til tillatelser for bakgrunns-GPS
+          # Legg til bakgrunns- og GPS-rettigheter
           sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />' android/app/src/main/AndroidManifest.xml
 
       - name: Build Debug APK
