@@ -16,7 +16,6 @@
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html, body, #map { height: 100%; width: 100vw; background: #111; overflow: hidden; font-family: Roboto, -apple-system, sans-serif; }
     
-    /* 1200ms Splash Screen */
     #splash-screen {
       position: fixed;
       top: 0;
@@ -160,7 +159,6 @@
     .btn-badge { padding: 4px 10px; font-size: 11px; border-radius: 6px; flex: initial; }
     button:active { opacity: 0.7; }
 
-    /* Historikk Modal */
     #trip-modal {
       position: absolute;
       top: 0;
@@ -236,7 +234,6 @@
 </head>
 <body>
 
-  <!-- Splash Screen -->
   <div id="splash-screen">
     <img src="asflt_icon-512.png" onerror="this.src='asflt_icon-192.png'" alt="Asflt">
     <h1>Asflt</h1>
@@ -281,22 +278,29 @@
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    // --- 1. Kart og Canvas Setup ---
     const initialLat = 62.37;
     const initialLng = 6.03;
 
-    const map = L.map('map', { zoomControl: false }).setView([initialLat, initialLng], 16);
+    let followUser = true; // Holder brukeren i sentrum automatisk
+
+    const map = L.map('map', { zoomControl: false }).setView([initialLat, initialLng], 17);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19,
       attribution: '© OpenStreetMap'
     }).addTo(map);
 
+    // Hvis brukeren drar i kartet med fingeren, slås autofølging av midlertidig
+    map.on('dragstart', () => {
+      followUser = false;
+      document.getElementById('btn-recenter').style.opacity = '1';
+    });
+
     const userMarker = L.circleMarker([initialLat, initialLng], {
-      radius: 6,
-      color: '#fff',
-      fillColor: '#3b82f6',
+      radius: 7,
+      color: '#ffffff',
+      fillColor: '#2563eb',
       fillOpacity: 1,
-      weight: 2
+      weight: 3
     }).addTo(map);
 
     const canvas = document.getElementById('fog-canvas');
@@ -310,7 +314,6 @@
     }
     window.addEventListener('resize', resizeCanvas);
 
-    // --- 2. Splash Screen Timer (1200ms) ---
     setTimeout(() => {
       const splash = document.getElementById('splash-screen');
       splash.style.opacity = '0';
@@ -322,8 +325,7 @@
 
     const todayStr = new Date().toISOString().slice(0, 10);
     const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
-    const MIN_DISPLACEMENT_TO_TRIGGER_TRIP = 50; 
-    const MIN_DIST_TO_SAVE_TRIP = 150;           
+    const MIN_DIST_TO_SAVE_TRIP = 100;
 
     let trips = JSON.parse(localStorage.getItem('asflt_trips') || '[]');
     let currentTrip = JSON.parse(localStorage.getItem('asflt_current_trip') || 'null');
@@ -352,7 +354,7 @@
         startTime: new Date().toISOString(),
         endTime: null,
         originCoord: startCoord,
-        isConfirmed: false,
+        isConfirmed: true,
         dist: 0,
         steps: 0,
         path: startCoord ? [startCoord] : []
@@ -360,7 +362,7 @@
     }
 
     function finalizeCurrentTrip() {
-      if (currentTrip && currentTrip.isConfirmed && currentTrip.dist >= MIN_DIST_TO_SAVE_TRIP && currentTrip.path.length > 2) {
+      if (currentTrip && currentTrip.dist >= MIN_DIST_TO_SAVE_TRIP && currentTrip.path.length > 2) {
         currentTrip.endTime = new Date().toISOString();
         trips.unshift(currentTrip);
         localStorage.setItem('asflt_trips', JSON.stringify(trips));
@@ -379,7 +381,7 @@
     }
 
     let inspectedTripLayer = null;
-    const REVEAL_RADIUS_METERS = 40;
+    const REVEAL_RADIUS_METERS = 42;
 
     function redrawFog() {
       ctx.globalCompositeOperation = 'source-over';
@@ -388,23 +390,22 @@
 
       ctx.globalCompositeOperation = 'destination-out';
       
-      // Åpne alltid der brukeren befinner seg
-      if (state.lastCoord) {
-        drawRevealCircle(state.lastCoord.lat, state.lastCoord.lng);
-      } else {
-        // Fallback til midten av kartet så det aldri er 100% beksvart
-        const center = map.getCenter();
-        drawRevealCircle(center.lat, center.lng);
+      // Åpne tåke for alle lagrede punkter
+      for (let i = 0; i < state.reveals.length; i++) {
+        drawRevealCircle(state.reveals[i].lat, state.reveals[i].lng);
       }
 
-      state.reveals.forEach(pt => drawRevealCircle(pt.lat, pt.lng));
+      // Åpne alltid der du står akkurat nå
+      if (state.lastCoord) {
+        drawRevealCircle(state.lastCoord.lat, state.lastCoord.lng);
+      }
     }
 
     function drawRevealCircle(lat, lng) {
       const containerPoint = map.latLngToContainerPoint([lat, lng]);
       const edgeLatLng = [lat + (REVEAL_RADIUS_METERS / 111320), lng];
       const edgePoint = map.latLngToContainerPoint(edgeLatLng);
-      const pixelRadius = Math.max(24, Math.abs(edgePoint.y - containerPoint.y));
+      const pixelRadius = Math.max(26, Math.abs(edgePoint.y - containerPoint.y));
 
       const grad = ctx.createRadialGradient(
         containerPoint.x, containerPoint.y, pixelRadius * 0.45,
@@ -441,30 +442,35 @@
       document.getElementById('day-steps').innerText = `${state.daySteps} skritt`;
 
       const badge = document.getElementById('trip-badge');
-      if (currentTrip && currentTrip.isConfirmed) {
+      if (currentTrip && currentTrip.dist > 10) {
         badge.innerText = 'På tur';
         badge.className = 'trip-badge active';
-        document.getElementById('trip-dist').innerText = formatDist(currentTrip.dist);
-        document.getElementById('trip-steps').innerText = `${currentTrip.steps} skritt`;
       } else {
-        badge.innerText = 'I ro / Klar';
-        badge.className = 'trip-badge';
-        document.getElementById('trip-dist').innerText = '0 m';
-        document.getElementById('trip-steps').innerText = '0 skritt';
+        badge.innerText = 'Aktiv';
+        badge.className = 'trip-badge active';
       }
+      document.getElementById('trip-dist').innerText = formatDist(currentTrip.dist);
+      document.getElementById('trip-steps').innerText = `${currentTrip.steps} skritt`;
     }
 
-    // --- GPS med forbedret nøyaktighet ---
+    // --- Posisjonering og Kontinuerlig Avduking ---
     let firstFix = true;
     if ('geolocation' in navigator) {
       navigator.geolocation.watchPosition(
         pos => {
           const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+          if (accuracy > 50) return; // Ignorer svært unøyaktige målinger
+
           userMarker.setLatLng([lat, lng]);
           const currentCoord = { lat, lng };
 
+          // Hold brukeren i sentrum
+          if (followUser) {
+            map.panTo([lat, lng], { animate: !firstFix, duration: 0.6 });
+          }
+
           if (firstFix) {
-            map.setView([lat, lng], 16);
+            map.setView([lat, lng], 17);
             firstFix = false;
             state.lastCoord = currentCoord;
             state.reveals.push(currentCoord);
@@ -486,35 +492,23 @@
               startNewTrip(currentCoord);
             }
 
-            const distFromOrigin = calcDistance(
-              currentTrip.originCoord.lat,
-              currentTrip.originCoord.lng,
-              lat,
-              lng
-            );
-
-            if (!currentTrip.isConfirmed && distFromOrigin >= MIN_DISPLACEMENT_TO_TRIGGER_TRIP) {
-              currentTrip.isConfirmed = true;
-            }
-
-            if (delta >= 4 && delta < 150) {
+            // Bevegelse over 2 meter registrerer avduking
+            if (delta >= 2.5 && delta < 200) {
               lastMoveTimestamp = now;
               localStorage.setItem('asflt_last_move_time', now.toString());
 
               state.dayDist += delta;
               localStorage.setItem('asflt_day_dist', state.dayDist);
 
-              if (currentTrip.isConfirmed) {
-                currentTrip.dist += delta;
-                currentTrip.path.push(currentCoord);
-                localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
+              currentTrip.dist += delta;
+              currentTrip.path.push(currentCoord);
+              localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
 
-                state.reveals.push(currentCoord);
-                localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
-                drawRevealCircle(lat, lng);
-              }
+              state.reveals.push(currentCoord);
+              localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
 
               state.lastCoord = currentCoord;
+              redrawFog();
             }
           } else {
             lastMoveTimestamp = now;
@@ -525,11 +519,7 @@
 
           updateUI();
         },
-        err => {
-          console.warn('Geolocation feil:', err);
-          // Hvis posisjon feiler, åpne likevel tåken der kartet står
-          redrawFog();
-        },
+        err => console.warn('Posisjonsfeil:', err),
         { enableHighAccuracy: true, maximumAge: 1000, timeout: 15000 }
       );
     }
@@ -537,7 +527,7 @@
     // --- Skritteller ---
     let lastAccel = 0;
     let stepCooldown = false;
-    const STEP_THRESHOLD = 11.5;
+    const STEP_THRESHOLD = 11.2;
 
     window.addEventListener('devicemotion', (event) => {
       const acc = event.accelerationIncludingGravity;
@@ -546,19 +536,19 @@
 
       if (mag > STEP_THRESHOLD && !stepCooldown && (mag - lastAccel) > 1.2) {
         state.daySteps++;
-        if (currentTrip && currentTrip.isConfirmed) {
+        if (currentTrip) {
           currentTrip.steps++;
           localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
         }
         localStorage.setItem('asflt_day_steps', state.daySteps);
         updateUI();
         stepCooldown = true;
-        setTimeout(() => { stepCooldown = false; }, 320);
+        setTimeout(() => { stepCooldown = false; }, 300);
       }
       lastAccel = mag;
     });
 
-    // --- Historikk & Sletting ---
+    // --- Historikk ---
     const modal = document.getElementById('trip-modal');
     const tripListContainer = document.getElementById('trip-list-container');
 
@@ -632,6 +622,7 @@
     }
 
     function showTripOnMap(trip) {
+      followUser = false;
       if (inspectedTripLayer) {
         map.removeLayer(inspectedTripLayer);
       }
@@ -649,15 +640,13 @@
     }
 
     document.getElementById('btn-recenter').addEventListener('click', () => {
+      followUser = true;
       if (inspectedTripLayer) {
         map.removeLayer(inspectedTripLayer);
         inspectedTripLayer = null;
       }
       if (state.lastCoord) {
-        map.setView([state.lastCoord.lat, state.lastCoord.lng], 16);
-      } else {
-        const center = map.getCenter();
-        map.setView(center, 16);
+        map.setView([state.lastCoord.lat, state.lastCoord.lng], 17);
       }
       redrawFog();
     });
@@ -666,7 +655,6 @@
       startNewTrip(state.lastCoord);
     });
 
-    // Initial tegningskjøring
     resizeCanvas();
     updateUI();
   </script>
