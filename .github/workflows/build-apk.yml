@@ -25,17 +25,16 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Prepare web assets
-        run: |
-          mkdir -p www
-          cp -r index.html manifest.json sw.js asflt_icon*.png www/ 2>/dev/null || cp index.html www/
-
       - name: Install dependencies
         run: npm install
 
-      - name: Add Android platform and configure icons & permissions
+      - name: Build web bundle with Vite
+        run: npm run build
+
+      - name: Add Android platform and configure permissions & icons
         run: |
           npx cap add android
+          npx cap sync android
 
           ICON_FILE=$(ls asflt_icon-512.png 2>/dev/null || ls asflt_icon*.png 2>/dev/null | head -n 1)
           if [ -n "$ICON_FILE" ]; then
@@ -63,7 +62,8 @@ jobs:
             echo '</resources>' >> android/app/src/main/res/values/ic_launcher_background.xml
           fi
 
-          sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />' android/app/src/main/AndroidManifest.xml
+          # Sikrer alle bakgrunns- og service-rettigheter i AndroidManifest.xml
+          sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />' android/app/src/main/AndroidManifest.xml
 
       - name: Build Debug APK
         run: |
