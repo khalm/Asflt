@@ -308,10 +308,10 @@
       </div>
     </div>
 
-    <!-- Vises når en eller flere turer er gjort synlige på kartet -->
+    <!-- Vises kun når historiske turer er gjort synlige -->
     <div id="visible-route-banner">
-      <span id="visible-route-text">Rute er synlig</span>
-      <button id="btn-hide-routes">Skjul ruter</button>
+      <span id="visible-route-text">Historiske ruter synlige</span>
+      <button id="btn-hide-routes">Skjul historikk</button>
     </div>
 
     <div class="stats-row">
@@ -339,7 +339,7 @@
     </div>
     <div class="modal-sub-bar">
       <button class="btn-primary" id="btn-modal-all-trips">Vis alle turer</button>
-      <button class="btn-secondary" id="btn-modal-hide-trips">Skjul alle ruter</button>
+      <button class="btn-secondary" id="btn-modal-hide-trips">Skjul historiske ruter</button>
     </div>
     <div class="trip-list" id="trip-list-container"></div>
   </div>
@@ -356,8 +356,8 @@
     const initialLng = 6.03;
     let followUser = true;
 
-    // Visningsmodus for ruter: 'none' (standard), 'all' (alle), eller spesifikk tripId
-    let routeDisplayMode = 'none';
+    // Visningsmodus for historikk: 'none' (standard), 'all', eller en spesifikk tripId
+    let historyDisplayMode = 'none';
 
     let isFogEnabled = localStorage.getItem('asflt_fog_enabled') !== 'false';
 
@@ -446,29 +446,40 @@
       currentTrip.color = getRandomColor();
     }
 
-    // --- Rutelag på kartet ---
-    const displayedLayers = new Map();
+    // 1. Aktiv tur rutesporing (brødsmulesti) – ALLTID SYNLIG
+    let activeTripPolyline = L.polyline([], {
+      color: currentTrip.color,
+      weight: 6,
+      opacity: 0.95,
+      lineCap: 'round',
+      lineJoin: 'round'
+    }).addTo(map);
 
-    function updateMapRoutes() {
-      // Fjern eksisterende tegnede ruter
-      displayedLayers.forEach(layer => map.removeLayer(layer));
-      displayedLayers.clear();
+    if (currentTrip.path && currentTrip.path.length > 0) {
+      activeTripPolyline.setLatLngs(currentTrip.path.map(p => [p.lat, p.lng]));
+    }
+
+    // 2. Historiske lag (kun når brukeren ber om det)
+    const historyLayers = new Map();
+
+    function updateHistoryRoutes() {
+      historyLayers.forEach(layer => map.removeLayer(layer));
+      historyLayers.clear();
 
       const banner = document.getElementById('visible-route-banner');
       const bannerText = document.getElementById('visible-route-text');
 
-      if (routeDisplayMode === 'none') {
+      if (historyDisplayMode === 'none') {
         banner.style.display = 'none';
         return;
       }
 
       banner.style.display = 'flex';
 
-      if (routeDisplayMode === 'all') {
-        bannerText.innerText = 'Viser alle ruter';
-        // Tegn alle lagrede turer
+      if (historyDisplayMode === 'all') {
+        bannerText.innerText = 'Viser alle historiske turer';
         trips.forEach(t => {
-          if (t.path && t.path.length > 1) {
+          if (t.id !== currentTrip.id && t.path && t.path.length > 1) {
             const line = L.polyline(t.path.map(p => [p.lat, p.lng]), {
               color: t.color || '#3b82f6',
               weight: 5,
@@ -476,14 +487,13 @@
               lineCap: 'round',
               lineJoin: 'round'
             }).addTo(map);
-            displayedLayers.set(t.id, line);
+            historyLayers.set(t.id, line);
           }
         });
       } else {
-        // En spesifikk tur
-        const trip = trips.find(t => t.id === routeDisplayMode) || (currentTrip && currentTrip.id === routeDisplayMode ? currentTrip : null);
+        const trip = trips.find(t => t.id === historyDisplayMode);
         if (trip && trip.path && trip.path.length > 1) {
-          bannerText.innerText = 'Viser 1 valgt rute';
+          bannerText.innerText = 'Viser 1 historisk tur';
           const line = L.polyline(trip.path.map(p => [p.lat, p.lng]), {
             color: trip.color || '#38bdf8',
             weight: 6,
@@ -491,49 +501,51 @@
             lineCap: 'round',
             lineJoin: 'round'
           }).addTo(map);
-          displayedLayers.set(trip.id, line);
+          historyLayers.set(trip.id, line);
         }
       }
     }
 
-    function hideAllRoutes() {
-      routeDisplayMode = 'none';
-      updateMapRoutes();
+    function hideHistoryRoutes() {
+      historyDisplayMode = 'none';
+      updateHistoryRoutes();
     }
 
-    document.getElementById('btn-hide-routes').addEventListener('click', hideAllRoutes);
+    document.getElementById('btn-hide-routes').addEventListener('click', hideHistoryRoutes);
     document.getElementById('btn-modal-hide-trips').addEventListener('click', () => {
-      hideAllRoutes();
+      hideHistoryRoutes();
       document.getElementById('trip-modal').style.display = 'none';
     });
 
     document.getElementById('btn-modal-all-trips').addEventListener('click', () => {
-      routeDisplayMode = 'all';
+      historyDisplayMode = 'all';
       followUser = false;
       document.getElementById('trip-modal').style.display = 'none';
-      updateMapRoutes();
+      updateHistoryRoutes();
 
       const allPoints = [];
       trips.forEach(t => {
         if (t.path) t.path.forEach(p => allPoints.push([p.lat, p.lng]));
       });
+      if (currentTrip.path) currentTrip.path.forEach(p => allPoints.push([p.lat, p.lng]));
+
       if (allPoints.length > 1) {
         map.fitBounds(L.latLngBounds(allPoints), { padding: [50, 50] });
       }
     });
 
     function showSingleTrip(tripId) {
-      if (routeDisplayMode === tripId) {
-        routeDisplayMode = 'none';
+      if (historyDisplayMode === tripId) {
+        historyDisplayMode = 'none';
       } else {
-        routeDisplayMode = tripId;
+        historyDisplayMode = tripId;
         followUser = false;
         const trip = trips.find(t => t.id === tripId);
         if (trip && trip.path && trip.path.length > 1) {
           map.fitBounds(L.latLngBounds(trip.path.map(p => [p.lat, p.lng])), { padding: [50, 50] });
         }
       }
-      updateMapRoutes();
+      updateHistoryRoutes();
     }
 
     function persistTripSnapshot() {
@@ -551,7 +563,20 @@
       persistTripSnapshot();
       currentTrip = createNewTrip(startCoord);
       localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
-      updateMapRoutes();
+
+      // Tilbakestill aktiv rute
+      if (activeTripPolyline) map.removeLayer(activeTripPolyline);
+      activeTripPolyline = L.polyline([], {
+        color: currentTrip.color,
+        weight: 6,
+        opacity: 0.95,
+        lineCap: 'round',
+        lineJoin: 'round'
+      }).addTo(map);
+
+      if (startCoord) activeTripPolyline.addLatLng([startCoord.lat, startCoord.lng]);
+
+      updateHistoryRoutes();
       updateUI();
     }
 
@@ -637,6 +662,7 @@
 
         if (currentTrip.path.length === 0) {
           currentTrip.path.push(currentCoord);
+          activeTripPolyline.addLatLng([lat, lng]);
         }
         if (isFogEnabled) redrawFog();
       }
@@ -656,14 +682,8 @@
           currentTrip.dist += delta;
           currentTrip.path.push(currentCoord);
 
-          // Oppdater linje dersom aktiv tur vises
-          if (routeDisplayMode === 'all' || routeDisplayMode === currentTrip.id) {
-            if (displayedLayers.has(currentTrip.id)) {
-              displayedLayers.get(currentTrip.id).addLatLng([lat, lng]);
-            } else {
-              updateMapRoutes();
-            }
-          }
+          // Alltid tegn opp brødsmulestien for aktiv tur
+          activeTripPolyline.addLatLng([lat, lng]);
 
           state.reveals.push(currentCoord);
           localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
@@ -751,11 +771,11 @@
       const deleted = trips.splice(idx, 1)[0];
       localStorage.setItem('asflt_trips', JSON.stringify(trips));
 
-      if (routeDisplayMode === deleted.id) {
-        routeDisplayMode = 'none';
+      if (historyDisplayMode === deleted.id) {
+        historyDisplayMode = 'none';
       }
 
-      updateMapRoutes();
+      updateHistoryRoutes();
 
       if (currentTrip && currentTrip.id === deleted.id) {
         startNewTrip(state.lastCoord);
@@ -776,7 +796,7 @@
           day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' 
         });
         const color = t.color || '#3b82f6';
-        const isCurrentlyShown = routeDisplayMode === t.id;
+        const isCurrentlyShown = historyDisplayMode === t.id;
         
         const item = document.createElement('div');
         item.className = 'trip-item';
@@ -807,12 +827,13 @@
           trips[idx].color = newColor;
           e.target.parentElement.style.background = newColor;
 
-          if (displayedLayers.has(trips[idx].id)) {
-            displayedLayers.get(trips[idx].id).setStyle({ color: newColor });
+          if (historyLayers.has(trips[idx].id)) {
+            historyLayers.get(trips[idx].id).setStyle({ color: newColor });
           }
 
           if (currentTrip && currentTrip.id === trips[idx].id) {
             currentTrip.color = newColor;
+            activeTripPolyline.setStyle({ color: newColor });
             localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
           }
 
@@ -820,7 +841,6 @@
         });
       });
 
-      // Trykk på "Vis / Skjul" for en enkelt tur
       document.querySelectorAll('.btn-view-trip').forEach(btn => {
         btn.addEventListener('click', (e) => {
           const tripId = parseInt(e.target.getAttribute('data-id'), 10);
@@ -850,7 +870,7 @@
     });
 
     applyFogVisibility();
-    updateMapRoutes();
+    updateHistoryRoutes();
     resizeCanvas();
     updateUI();
   </script>
