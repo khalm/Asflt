@@ -1,8 +1,6 @@
 {
-  "appId": "com.asflt.app",
+  "appId": "com.khalm.asflt",
   "appName": "Asflt",
-  "webDir": "www",
-  "server": {
-    "androidScheme": "https"
-  }
+  "webDir": "dist",
+  "bundledWebRuntime": false
 }
