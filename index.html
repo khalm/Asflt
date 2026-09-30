@@ -329,8 +329,10 @@
 
     setTimeout(() => {
       const splash = document.getElementById('splash-screen');
-      splash.style.opacity = '0';
-      setTimeout(() => { splash.style.display = 'none'; resizeCanvas(); }, 350);
+      if (splash) {
+        splash.style.opacity = '0';
+        setTimeout(() => { splash.style.display = 'none'; resizeCanvas(); }, 350);
+      }
     }, 1200);
 
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -497,6 +499,7 @@
           state.dayDist += delta;
           localStorage.setItem('asflt_day_dist', state.dayDist);
 
+          // Beregn skritt automatisk når skjermen er i lommen og akselerometeret pauser
           const addedSteps = Math.max(1, Math.round(delta / 0.74));
           state.daySteps += addedSteps;
           currentTrip.steps += addedSteps;
@@ -521,7 +524,7 @@
       updateUI();
     }
 
-    // Start Foreground Service bakgrunns-GPS
+    // Start native Foreground Service for sporing i lomma
     async function startTracking() {
       try {
         await BackgroundGeolocation.addWatcher(
@@ -556,7 +559,7 @@
 
     startTracking();
 
-    // Skritteller via sensor
+    // Skritteller via bevegelsessensor
     let lastAccel = 0;
     let stepCooldown = false;
     window.addEventListener('devicemotion', (event) => {
@@ -577,7 +580,7 @@
       lastAccel = mag;
     });
 
-    // Historikk
+    // Historikk modal & operasjoner
     const modal = document.getElementById('trip-modal');
     const tripListContainer = document.getElementById('trip-list-container');
 
