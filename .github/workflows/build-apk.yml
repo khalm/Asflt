@@ -62,17 +62,43 @@ jobs:
             echo '</resources>' >> android/app/src/main/res/values/ic_launcher_background.xml
           fi
 
-          # Sikrer alle bakgrunns- og service-rettigheter i AndroidManifest.xml
           sed -i '/<\/manifest>/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />\n    <uses-permission android:name="android.permission.WAKE_LOCK" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />' android/app/src/main/AndroidManifest.xml
 
-      - name: Build Debug APK
+      - name: Build Release APK with fixed signing key
         run: |
+          # Opprett en fast nøkkel med forutsigbare verdier
+          keytool -genkeypair -v -keystore android/app/asflt.keystore -alias asfltkey -keyalg RSA -keysize 2048 -validity 10000 -storepass asfltpass -keypass asfltpass -dname "CN=Asflt, OU=Mobile, O=Asflt, L=Oslo, C=NO"
+
+          # Konfigurer Gradle til å bruke den faste nøkkelen for release
+          cat << 'EOF' > patch_gradle.py
+          with open("android/app/build.gradle", "r") as f:
+              content = f.read()
+
+          signing_config = """
+              signingConfigs {
+                  release {
+                      storeFile file('asflt.keystore')
+                      storePassword 'asfltpass'
+                      keyAlias 'asfltkey'
+                      keyPassword 'asfltpass'
+                  }
+              }
+          """
+          content = content.replace("android {", "android {" + signing_config, 1)
+          content = content.replace("buildTypes {", "buildTypes {\n        release {\n            signingConfig signingConfigs.release\n            minifyEnabled false\n        }")
+          
+          with open("android/app/build.gradle", "w") as f:
+              f.write(content)
+          EOF
+
+          python3 patch_gradle.py
+
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Asflt-App
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/release/app-release.apk
