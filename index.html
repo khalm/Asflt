@@ -417,7 +417,12 @@
     }, 1200);
 
     const todayStr = new Date().toISOString().slice(0, 10);
-    let trips = JSON.parse(localStorage.getItem('asflt_trips') || '[]');
+
+    // Rens opp automatisk: Fjern alle gamle "mikro-turer" under 100m fra historikken
+    let rawTrips = JSON.parse(localStorage.getItem('asflt_trips') || '[]');
+    let trips = rawTrips.filter(t => t.dist >= 100 && t.path && t.path.length >= 5);
+    localStorage.setItem('asflt_trips', JSON.stringify(trips));
+
     let state = {
       reveals: JSON.parse(localStorage.getItem('asflt_reveals') || '[]'),
       dayDate: localStorage.getItem('asflt_day_date') || todayStr,
@@ -446,17 +451,6 @@
       };
     }
 
-    // Ved oppstart: Hvis det fantes en gammel aktiv tur, arkiver den og start alltid en FRISK tur med ny farge
-    let previousTrip = JSON.parse(localStorage.getItem('asflt_current_trip') || 'null');
-    if (previousTrip && previousTrip.dist >= 50 && previousTrip.path && previousTrip.path.length > 2) {
-      const exists = trips.some(t => t.id === previousTrip.id);
-      if (!exists) {
-        trips.unshift(previousTrip);
-        localStorage.setItem('asflt_trips', JSON.stringify(trips));
-      }
-    }
-
-    // Alltid en ny, distinkt tur ved oppstart
     let currentTrip = createNewTrip();
     localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
 
@@ -556,10 +550,10 @@
       updateHistoryRoutes();
     }
 
+    // Lagrer bare turen til listen hvis den er en REELL tur (minst 100 meter)
     function persistTripSnapshot() {
       localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
-      // Turen lagres/oppdateres i listen så snart den har mer enn 2 punkter
-      if (currentTrip.path && currentTrip.path.length >= 2) {
+      if (currentTrip.dist >= 100 && currentTrip.path && currentTrip.path.length >= 5) {
         const idx = trips.findIndex(t => t.id === currentTrip.id);
         if (idx >= 0) {
           trips[idx] = currentTrip;
@@ -571,8 +565,8 @@
     }
 
     function startNewTrip(startCoord = null) {
-      // Sikre at forrige tur er lagret i historikken før ny lages
-      if (currentTrip && currentTrip.dist >= 30 && currentTrip.path.length >= 2) {
+      // Arkiver kun dersom turen faktisk ble gått
+      if (currentTrip && currentTrip.dist >= 100 && currentTrip.path.length >= 5) {
         const idx = trips.findIndex(t => t.id === currentTrip.id);
         if (idx >= 0) trips[idx] = currentTrip;
         else trips.unshift(currentTrip);
@@ -665,13 +659,9 @@
       }
     }
 
-    // ==========================================
-    // ROBUST POSISJON- OG TELEPORTERINGSFILTER
-    // ==========================================
     const MAX_WALKING_SPEED_KMH = 19;
     const MAX_WALKING_SPEED_MS = MAX_WALKING_SPEED_KMH / 3.6; // ~5.27 m/s
-    const MAX_JUMP_METERS = 75; 
-    const INACTIVITY_AUTO_SPLIT_MS = 15 * 60 * 1000; // 15 minutter i ro splitter turen
+    const INACTIVITY_AUTO_SPLIT_MS = 25 * 60 * 1000; // 25 minutter i ro før tur deles automatisk
 
     let stepTimestamps = [];
     let isHumanWalking = false;
@@ -728,7 +718,8 @@
     let firstFixEver = true;
 
     function handleLocationUpdate(lat, lng, accuracy, rawSpeed) {
-      if (accuracy && accuracy > 35) return;
+      // Ignorer unøyaktige målinger (unngår GPS-sprett)
+      if (accuracy && accuracy > 30) return;
 
       const now = Date.now();
       const timeDiffSec = Math.max(1, (now - lastFixTime) / 1000);
@@ -760,34 +751,35 @@
       const calculatedSpeedMs = deltaMeters / timeDiffSec;
       const effectiveSpeed = (rawSpeed !== undefined && rawSpeed !== null && rawSpeed >= 0) ? rawSpeed : calculatedSpeedMs;
 
-      // 1. Sjekk om det har gått over 15 minutter i ro siden forrige bevegelse:
-      if ((now - lastMovementTime) > INACTIVITY_AUTO_SPLIT_MS && deltaMeters > 30) {
-        startNewTrip(currentCoord);
+      // 1. Inaktivitet: hvis du har sittet i ro over 25 minutter og går igjen, start ny tur
+      if ((now - lastMovementTime) > INACTIVITY_AUTO_SPLIT_MS && deltaMeters > 50) {
+        if (currentTrip.dist >= 100) {
+          startNewTrip(currentCoord);
+        }
         state.lastCoord = currentCoord;
         lastMovementTime = now;
         return;
       }
 
-      // 2. Kjøretøy / GPS-hopp / Teleport:
-      if (deltaMeters > MAX_JUMP_METERS || effectiveSpeed > MAX_WALKING_SPEED_MS) {
-        startNewTrip(currentCoord);
+      // 2. Kjøring / teleport (høy hastighet eller stort hopp):
+      if (effectiveSpeed > MAX_WALKING_SPEED_MS || deltaMeters > 120) {
+        // Hvis du kjører bil: flytt posisjonen uten å tegne spor eller lage ny tur
         state.lastCoord = currentCoord;
-        lastMovementTime = now;
         isHumanWalking = false;
-        updateUI('Kjører / Hopp', 'vehicle');
+        updateUI('Kjører (Pause)', 'vehicle');
         return;
       }
 
-      // 3. I ro:
+      // 3. I ro eller innendørs GPS-flimmer (< 4m):
       const hasRecentStep = (now - lastStepTime) < 5000;
-      if (!hasRecentStep && deltaMeters < 3.5) {
+      if (!hasRecentStep && deltaMeters < 4.0) {
         isHumanWalking = false;
         updateUI('I ro', 'normal');
         return;
       }
 
-      // 4. Gyldig gange registrert:
-      if (deltaMeters >= 2.5 && deltaMeters <= MAX_JUMP_METERS) {
+      // 4. Gyldig gange i normal fart:
+      if (deltaMeters >= 2.5 && deltaMeters <= 120) {
         lastMovementTime = now;
 
         state.dayDist += deltaMeters;
@@ -882,7 +874,7 @@
     function renderTripList() {
       tripListContainer.innerHTML = '';
       if (trips.length === 0) {
-        tripListContainer.innerHTML = '<p style="color: #9ca3af; text-align: center; margin-top: 40px;">Ingen turer lagret enda.</p>';
+        tripListContainer.innerHTML = '<p style="color: #9ca3af; text-align: center; margin-top: 40px;">Ingen turer over 100 m lagret enda.</p>';
         return;
       }
 
