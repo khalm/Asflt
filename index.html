@@ -418,14 +418,12 @@
 
     const todayStr = new Date().toISOString().slice(0, 10);
     let trips = JSON.parse(localStorage.getItem('asflt_trips') || '[]');
-    let currentTrip = JSON.parse(localStorage.getItem('asflt_current_trip') || 'null');
-
     let state = {
       reveals: JSON.parse(localStorage.getItem('asflt_reveals') || '[]'),
       dayDate: localStorage.getItem('asflt_day_date') || todayStr,
       dayDist: parseFloat(localStorage.getItem('asflt_day_dist') || '0'),
       daySteps: parseInt(localStorage.getItem('asflt_day_steps') || '0', 10),
-      lastCoord: null // Starter alltid som null ved oppstart så vi aldri trekker strek fra forrige økt
+      lastCoord: null
     };
 
     if (state.dayDate !== todayStr) {
@@ -448,12 +446,19 @@
       };
     }
 
-    if (!currentTrip) {
-      currentTrip = createNewTrip();
-      localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
-    } else if (!currentTrip.color) {
-      currentTrip.color = getRandomColor();
+    // Ved oppstart: Hvis det fantes en gammel aktiv tur, arkiver den og start alltid en FRISK tur med ny farge
+    let previousTrip = JSON.parse(localStorage.getItem('asflt_current_trip') || 'null');
+    if (previousTrip && previousTrip.dist >= 50 && previousTrip.path && previousTrip.path.length > 2) {
+      const exists = trips.some(t => t.id === previousTrip.id);
+      if (!exists) {
+        trips.unshift(previousTrip);
+        localStorage.setItem('asflt_trips', JSON.stringify(trips));
+      }
     }
+
+    // Alltid en ny, distinkt tur ved oppstart
+    let currentTrip = createNewTrip();
+    localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
 
     let activeTripPolyline = L.polyline([], {
       color: currentTrip.color,
@@ -462,10 +467,6 @@
       lineCap: 'round',
       lineJoin: 'round'
     }).addTo(map);
-
-    if (currentTrip.path && currentTrip.path.length > 0) {
-      activeTripPolyline.setLatLngs(currentTrip.path.map(p => [p.lat, p.lng]));
-    }
 
     const historyLayers = new Map();
 
@@ -557,17 +558,27 @@
 
     function persistTripSnapshot() {
       localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
-      const idx = trips.findIndex(t => t.id === currentTrip.id);
-      if (idx >= 0) {
-        trips[idx] = currentTrip;
-      } else if (currentTrip.path.length >= 2) {
-        trips.unshift(currentTrip);
+      // Turen lagres/oppdateres i listen så snart den har mer enn 2 punkter
+      if (currentTrip.path && currentTrip.path.length >= 2) {
+        const idx = trips.findIndex(t => t.id === currentTrip.id);
+        if (idx >= 0) {
+          trips[idx] = currentTrip;
+        } else {
+          trips.unshift(currentTrip);
+        }
+        localStorage.setItem('asflt_trips', JSON.stringify(trips));
       }
-      localStorage.setItem('asflt_trips', JSON.stringify(trips));
     }
 
     function startNewTrip(startCoord = null) {
-      persistTripSnapshot();
+      // Sikre at forrige tur er lagret i historikken før ny lages
+      if (currentTrip && currentTrip.dist >= 30 && currentTrip.path.length >= 2) {
+        const idx = trips.findIndex(t => t.id === currentTrip.id);
+        if (idx >= 0) trips[idx] = currentTrip;
+        else trips.unshift(currentTrip);
+        localStorage.setItem('asflt_trips', JSON.stringify(trips));
+      }
+
       currentTrip = createNewTrip(startCoord);
       localStorage.setItem('asflt_current_trip', JSON.stringify(currentTrip));
 
@@ -659,12 +670,14 @@
     // ==========================================
     const MAX_WALKING_SPEED_KMH = 19;
     const MAX_WALKING_SPEED_MS = MAX_WALKING_SPEED_KMH / 3.6; // ~5.27 m/s
-    const MAX_JUMP_METERS = 75; // Hvis avstanden hopper mer enn 75m på en måling, er det bil/teleport
+    const MAX_JUMP_METERS = 75; 
+    const INACTIVITY_AUTO_SPLIT_MS = 15 * 60 * 1000; // 15 minutter i ro splitter turen
 
     let stepTimestamps = [];
     let isHumanWalking = false;
     let lastStepTime = 0;
     let lastFixTime = Date.now();
+    let lastMovementTime = Date.now();
 
     function registerPedometerStep() {
       const now = Date.now();
@@ -715,7 +728,6 @@
     let firstFixEver = true;
 
     function handleLocationUpdate(lat, lng, accuracy, rawSpeed) {
-      // Ignorer målinger med dårlig nøyaktighet for å hindre GPS-hopp
       if (accuracy && accuracy > 35) return;
 
       const now = Date.now();
@@ -729,7 +741,6 @@
         map.panTo([lat, lng], { animate: !firstFixEver, duration: 0.6 });
       }
 
-      // Aller første fiks ved app-start: Sett bare posisjon, ALDRI trekk strek
       if (firstFixEver || !state.lastCoord) {
         map.setView([lat, lng], 17);
         firstFixEver = false;
@@ -749,19 +760,25 @@
       const calculatedSpeedMs = deltaMeters / timeDiffSec;
       const effectiveSpeed = (rawSpeed !== undefined && rawSpeed !== null && rawSpeed >= 0) ? rawSpeed : calculatedSpeedMs;
 
-      // 1. SJEKK FOR TELEPORTERING / BILTUR MELLOM TO STEDER:
-      // Hvis du har beveget deg mer enn 75 meter, eller farten er over gangfart:
-      if (deltaMeters > MAX_JUMP_METERS || effectiveSpeed > MAX_WALKING_SPEED_MS) {
-        // Brukeren har reist med bil/buss eller åpnet appen et helt nytt sted!
-        // Start automatisk en ny ren tur på det nye stedet uten å trekke linje mellom dem
+      // 1. Sjekk om det har gått over 15 minutter i ro siden forrige bevegelse:
+      if ((now - lastMovementTime) > INACTIVITY_AUTO_SPLIT_MS && deltaMeters > 30) {
         startNewTrip(currentCoord);
         state.lastCoord = currentCoord;
+        lastMovementTime = now;
+        return;
+      }
+
+      // 2. Kjøretøy / GPS-hopp / Teleport:
+      if (deltaMeters > MAX_JUMP_METERS || effectiveSpeed > MAX_WALKING_SPEED_MS) {
+        startNewTrip(currentCoord);
+        state.lastCoord = currentCoord;
+        lastMovementTime = now;
         isHumanWalking = false;
         updateUI('Kjører / Hopp', 'vehicle');
         return;
       }
 
-      // 2. I RO:
+      // 3. I ro:
       const hasRecentStep = (now - lastStepTime) < 5000;
       if (!hasRecentStep && deltaMeters < 3.5) {
         isHumanWalking = false;
@@ -769,8 +786,10 @@
         return;
       }
 
-      // 3. GYLDIG SKRITT OG GANGE:
+      // 4. Gyldig gange registrert:
       if (deltaMeters >= 2.5 && deltaMeters <= MAX_JUMP_METERS) {
+        lastMovementTime = now;
+
         state.dayDist += deltaMeters;
         localStorage.setItem('asflt_day_dist', state.dayDist);
 
@@ -785,7 +804,6 @@
           localStorage.setItem('asflt_day_steps', state.daySteps);
         }
 
-        // Avduk tåke kun der du faktisk har gått
         state.reveals.push(currentCoord);
         localStorage.setItem('asflt_reveals', JSON.stringify(state.reveals));
 
