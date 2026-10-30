@@ -1,4 +1,4 @@
-const CACHE_NAME = 'asflt-v1';
+const CACHE_NAME = 'asflt-v2';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
